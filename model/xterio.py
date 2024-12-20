@@ -1,4 +1,5 @@
 import datetime
+import json
 import random
 import time
 import traceback
@@ -397,54 +398,33 @@ class Xterio:
 
     def send_chat_messages(self):
         try:
+            scene_response = self.client.get(
+                "https://api.xter.io/ai/v1/scene?lang="
+            )
+
+            scene = scene_response.json()['data']['list'][0]
+
+            describe = scene['describe']
+
+            prologue = scene['prologue']
+
+            messages = [
+                {
+                    'role': 'system',
+                    'content': f'YOU ARE NOT ALLOWED TO WRITE AN ANSWER LONGER THAN 250 CHARACTERS. Your goal is to maximize value in [value][/value]. Starting value - 50, you MUST maximize it as much as you can. You will see the change in the next message. If you see the number decreasing, change your approach and correct the situation. The better you answer, the more you earn. Mision description: {describe}'
+                },
+                {
+                    'role': 'assistant',
+                    'content': prologue
+                }
+            ]
+
             for _ in range(3):
                 if self.config["settings"]["use_chatgpt"]:
-                    response = self.client.get("https://api.xter.io/ai/v1/scene?lang=")
-                    if response.json()["err_code"] != 0:
-                        raise Exception(response.text)
-
-                    scene_list = response.json()["data"]["list"]
-                    if not scene_list:
-                        raise Exception("Scene list is empty")
-                    scene = (
-                        scene_list[0]["describe"]
-                        if len(scene_list) == 1
-                        else scene_list[-1]["describe"]
-                    )
-                    if len(scene_list[0]) == 1:
-                        chat_item = scene_list[0]
-                    else:
-                        chat_item = scene_list[-1]
-
-                    scene = chat_item["describe"]
-
-                    response = self.client.get("https://api.xter.io/ai/v1/user/chat")
-                    if response.json()["err_code"] != 0:
-                        raise Exception(response.text)
-
-                    message_list = response.json()["data"]["list"]
-                    if not message_list:
-                        prologue = chat_item["prologue"]
-                        placeholder = chat_item["placeholder"]
-
-                        message = f"Prologue: {prologue}. Placeholder: {placeholder}"
-
-                    else:
-                        last_message = (
-                            message_list[0]
-                            if len(message_list) == 1
-                            else message_list[-1]
-                        )
-
-                        ai_answer_text = last_message["extract"]["words"]
-                        ai_answer_mood = last_message["extract"]["mood"]
-
-                        message = f"Scene: {scene}. AI mood: {ai_answer_mood}. AI asks you: {ai_answer_text}"
-
                     message = ask_chatgpt(
-                        self.config["settings"]["chat_gpt_api_key"], message
+                        self.config["settings"]["chat_gpt_api_key"],
+                        messages=messages
                     )
-
                 else:
                     message = random.choice(chat_messages.CHAT_MESSAGES)
 
@@ -491,6 +471,24 @@ class Xterio:
                 else:
                     logger.success(f"{self.address} | Sent chat message: {message}")
                     self.is_captcha_solved_for_chat = True
+
+                    try:
+                        last_line = [line for line in response.text.splitlines() if line.strip()][-1]
+
+                        answer = json.loads(last_line)['responses'][0]['chunk']
+
+                        logger.info(f'{self.address} | Received answer: {answer["content"]}')
+
+                        messages.append(
+                            {
+                                'role': 'user',
+                                'content': message
+                            }
+                        )
+
+                        messages.append(answer)
+                    except:
+                        logger.error(f"{self.address} | Failed to get answer from response: {response.text}")
 
                 time.sleep(random.randint(3, 6))
 
